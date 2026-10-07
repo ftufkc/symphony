@@ -1,0 +1,21 @@
+.claude/
+.docs/
+.openspec/
+
+# secrets
+.env
+.env.*
+!.env.example
+
+# reference clones / scratch
+.tmp/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

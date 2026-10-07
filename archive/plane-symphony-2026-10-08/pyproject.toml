@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plane-symphony"
+version = "0.1.0"
+description = "Pick up general-purpose tasks from Plane and run them autonomously with OpenAI Codex."
+requires-python = ">=3.10"
+dependencies = ["httpx", "pyyaml", "mcp", "openai-codex"]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"

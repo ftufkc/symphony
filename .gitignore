@@ -1,0 +1,6 @@
+# Local Plane credentials and runtime state
+.env
+.env.*
+!.env.example
+.tmp/
+*.local.md
