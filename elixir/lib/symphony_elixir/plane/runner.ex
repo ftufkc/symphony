@@ -17,7 +17,7 @@ defmodule SymphonyElixir.Plane.Runner do
     case claim(ctx) do
       :ok ->
         Runtime.begin_run(ctx)
-        runner_opts = session_options(opts, tracker, cfg, issue, mention, secret_names)
+        runner_opts = session_options(opts, tracker, mention, secret_names)
         result = prepare_and_invoke(ctx, recipient, runner_opts)
 
         if context = Runtime.finish_run(issue.id), do: finalize(context, result)
@@ -76,14 +76,11 @@ defmodule SymphonyElixir.Plane.Runner do
     %{tracker | provider: provider}
   end
 
-  defp session_options(opts, tracker, cfg, issue, mention, secret_names) do
+  defp session_options(opts, tracker, mention, secret_names) do
     specs = AgentTool.tool_specs()
     binding = %{adapter: Adapter, tracker_settings: tracker, tool_specs: specs, secret_environment_names: secret_names}
 
-    options =
-      opts
-      |> Keyword.put(:thread_key, "plane:#{cfg.workspace_slug}:#{issue.id}")
-      |> Keyword.put(:dynamic_tool_binding, binding)
+    options = Keyword.put(opts, :dynamic_tool_binding, binding)
 
     if mention, do: Keyword.put(options, :max_turns, 1), else: options
   end

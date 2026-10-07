@@ -13,7 +13,8 @@ _In this [demo video](https://player.vimeo.com/video/1186371009?h=5626e4b899), S
 ## Plane CE fork
 
 This fork adds Plane Community Edition v1 work-items as a coding-task tracker while retaining the
-upstream Elixir scheduler, execution timeout controls and existing tracker implementations. See [Plane setup](elixir/docs/plane.md)
+upstream Elixir scheduler, execution timeout controls and fresh threads per worker. Existing tracker
+implementations are retained. See [Plane setup](elixir/docs/plane.md)
 and [the coding workflow](elixir/PLANE_WORKFLOW.md). Repository preparation and PR/MR policy remain
 workflow-owned, so code can be hosted on GitLab or another Git service.
 

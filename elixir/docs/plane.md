@@ -70,9 +70,10 @@ resolved auth are captured for each attempt; future attempts use reloaded config
 deferred while attempts run. Restart for webhook secret changes. Tokens should be outside the target
 repository and never embedded in a git URL or workflow prompt.
 
-Codex owns thread persistence. Plane attempts search the exact named thread for the issue and cwd,
-resume it when available, and start fresh if lookup/resume fails. A deleted/cleaned workspace can
-start a new thread. Existing trackers still start fresh threads as upstream does.
+Each worker session starts a fresh Codex thread, including retries and new mentions on an existing
+issue. The initial prompt includes the work item and current comments; the existing workspace/git
+state remains available. Turns within the same worker use the same live thread, following upstream
+continuation behavior. There is no cross-attempt thread lookup, naming, or resume policy.
 
 ## Failure policy and workspaces
 

@@ -24,7 +24,8 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
 During app-server sessions, the selected tracker adapter may advertise provider-native tools. The
 Linear serves `linear_graphql`, GitHub Issues serves `github_api`, Jira Cloud serves
 `jira_rest`, Asana serves `asana_api`, GitLab serves `gitlab_api`, and Plane serves `plane_request`
-and convenience tools. Plane uses the upstream worker timeout and stall controls. See [Plane setup](docs/plane.md) and use `PLANE_WORKFLOW.md` for coding tasks. Symphony executes those
+and convenience tools. Plane uses the upstream worker timeout and stall controls and starts a fresh
+Codex thread for each worker session. See [Plane setup](docs/plane.md) and use `PLANE_WORKFLOW.md` for coding tasks. Symphony executes those
 tools with configured host-side auth and removes declared tracker-token environment variables from
 the Codex child, so the agent does not need a second tracker login.
 

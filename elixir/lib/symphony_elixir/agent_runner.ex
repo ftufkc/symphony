@@ -89,7 +89,7 @@ defmodule SymphonyElixir.AgentRunner do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issues_by_ids/1)
 
-    session_opts = Keyword.take(opts, [:thread_key, :dynamic_tool_binding]) |> Keyword.put(:worker_host, worker_host)
+    session_opts = Keyword.take(opts, [:dynamic_tool_binding]) |> Keyword.put(:worker_host, worker_host)
 
     with {:ok, session} <- AppServer.start_session(workspace, session_opts) do
       try do

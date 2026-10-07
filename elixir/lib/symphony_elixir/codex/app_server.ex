@@ -46,7 +46,7 @@ defmodule SymphonyElixir.Codex.AppServer do
 
       with {:ok, session_policies} <- session_policies(expanded_workspace, worker_host),
            {:ok, thread_id} <-
-             do_start_session(port, expanded_workspace, session_policies, dynamic_tool_binding, opts) do
+             do_start_session(port, expanded_workspace, session_policies, dynamic_tool_binding) do
         {:ok,
          %{
            port: port,
@@ -304,46 +304,10 @@ defmodule SymphonyElixir.Codex.AppServer do
     Config.codex_runtime_settings(workspace, remote: true)
   end
 
-  defp do_start_session(port, workspace, session_policies, dynamic_tool_binding, opts) do
+  defp do_start_session(port, workspace, session_policies, dynamic_tool_binding) do
     case send_initialize(port) do
-      :ok -> open_thread(port, workspace, session_policies, dynamic_tool_binding, Keyword.get(opts, :thread_key))
+      :ok -> start_thread(port, workspace, session_policies, dynamic_tool_binding)
       {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp open_thread(port, workspace, policies, binding, nil), do: start_thread(port, workspace, policies, binding)
-
-  defp open_thread(port, workspace, policies, binding, key) when is_binary(key) do
-    send_message(port, %{"method" => "thread/list", "id" => 4, "params" => %{"searchTerm" => key, "cwd" => workspace, "sourceKinds" => [], "limit" => 100}})
-
-    existing =
-      case await_response(port, 4) do
-        {:ok, %{"data" => threads}} -> Enum.find(threads, &(&1["name"] == key or &1["preview"] == key))
-        _ -> nil
-      end
-
-    result =
-      case existing do
-        %{"id" => thread_id} ->
-          send_message(port, %{
-            "method" => "thread/resume",
-            "id" => 2,
-            "params" => %{"threadId" => thread_id, "cwd" => workspace, "approvalPolicy" => policies.approval_policy, "sandbox" => policies.thread_sandbox}
-          })
-
-          case await_response(port, 2) do
-            {:ok, %{"thread" => %{"id" => resumed}}} -> {:ok, resumed}
-            _ -> start_thread(port, workspace, policies, binding)
-          end
-
-        _ ->
-          start_thread(port, workspace, policies, binding)
-      end
-
-    with {:ok, thread_id} <- result do
-      send_message(port, %{"method" => "thread/name/set", "id" => 5, "params" => %{"threadId" => thread_id, "name" => key}})
-      _ = await_response(port, 5)
-      {:ok, thread_id}
     end
   end
 

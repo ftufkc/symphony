@@ -232,7 +232,7 @@ defmodule SymphonyElixir.PlaneTest do
 
     runner = fn prepared, _, run_opts ->
       assert prepared.description =~ "Fix & test"
-      assert run_opts[:thread_key] == "plane:test:p1/w1"
+      refute Keyword.has_key?(run_opts, :thread_key)
       assert run_opts[:dynamic_tool_binding].tracker_settings.provider["api_key"] == "fixture-token"
       assert AgentTool.execute("add_comment", %{"markdown" => "Implemented; tests passed."}, opts ++ [issue: prepared])["success"]
       assert AgentTool.execute("set_state", %{"state_name" => "AI Done"}, opts ++ [issue: prepared])["success"]
@@ -290,7 +290,7 @@ defmodule SymphonyElixir.PlaneTest do
     assert length(Agent.get(state, & &1.comments[{"p1", "w1"}])) == 1
   end
 
-  test "app-server resumes the named coding thread and falls back when resume fails" do
+  test "app-server starts a fresh thread for each worker session in the same workspace" do
     root = Path.join(System.tmp_dir!(), "plane-thread-#{System.unique_integer([:positive])}")
     workspace = Path.join(root, "workspaces/ONE-1")
     File.mkdir_p!(workspace)
@@ -298,35 +298,26 @@ defmodule SymphonyElixir.PlaneTest do
     log = Path.join(root, "protocol.jsonl")
 
     File.write!(script, """
-    import sys,json
+    import sys,json,uuid
     for line in sys.stdin:
       p=json.loads(line)
       with open(sys.argv[1], 'a') as f: f.write(line)
       if 'id' not in p: continue
-      method=p['method']
       result={}
-      if method=='thread/list': result={'data':[{'id':'saved','name':'named'}]}
-      if method=='thread/resume':
-        if len(sys.argv)>2:
-          print(json.dumps({'id':p['id'],'error':{'code':-1,'message':'missing'}}),flush=True)
-          continue
-        result={'thread':{'id':'saved'}}
-      if method=='thread/start': result={'thread':{'id':'fresh'}}
+      if p['method']=='thread/start': result={'thread':{'id':str(uuid.uuid4())}}
       print(json.dumps({'id':p['id'],'result':result}),flush=True)
     """)
 
     binding = Tracker.bind_agent_tools()
     write_workflow_file!(Workflow.workflow_file_path(), workspace_root: Path.join(root, "workspaces"), codex_command: "python3 #{script} #{log}")
-    assert {:ok, session} = AppServer.start_session(workspace, thread_key: "named", dynamic_tool_binding: binding)
-    assert session.thread_id == "saved"
-    :ok = AppServer.stop_session(session)
+    assert {:ok, first} = AppServer.start_session(workspace, dynamic_tool_binding: binding)
+    :ok = AppServer.stop_session(first)
+    assert {:ok, second} = AppServer.start_session(workspace, dynamic_tool_binding: binding)
+    :ok = AppServer.stop_session(second)
+    refute first.thread_id == second.thread_id
     messages = File.read!(log) |> String.split("\n", trim: true) |> Enum.map(&Jason.decode!/1)
-    refute Enum.any?(messages, &(&1["method"] == "thread/start"))
-    assert Enum.any?(messages, &(&1["method"] == "thread/name/set"))
-    write_workflow_file!(Workflow.workflow_file_path(), workspace_root: Path.join(root, "workspaces"), codex_command: "python3 #{script} #{log} fail")
-    assert {:ok, fresh} = AppServer.start_session(workspace, thread_key: "named", dynamic_tool_binding: binding)
-    assert fresh.thread_id == "fresh"
-    AppServer.stop_session(fresh)
+    assert Enum.count(messages, &(&1["method"] == "thread/start")) == 2
+    refute Enum.any?(messages, &(&1["method"] in ["thread/list", "thread/resume", "thread/name/set"]))
     File.rm_rf!(root)
   end
 
@@ -378,7 +369,6 @@ defmodule SymphonyElixir.PlaneTest do
       p=json.loads(line)
       if 'id' not in p: continue
       result={}
-      if p['method']=='thread/list': result={'data':[]}
       if p['method']=='thread/start': result={'thread':{'id':'thread1'}}
       if p['method']=='turn/start': result={'turn':{'id':'turn1'}}
       print(json.dumps({'id':p['id'],'result':result}),flush=True)
