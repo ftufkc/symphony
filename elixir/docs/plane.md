@@ -46,9 +46,11 @@ app-server bridge. Tokens and declared custom token env references are removed f
   Match `active_states` to your trigger/working names. State IDs are resolved within each project,
   case-insensitively; ambiguous names fail. Explicit setup normalizes legacy `AI Start` and creates
   missing states. It never runs automatically.
-- `run_timeout_ms`: entire coding/context/session attempt cap, default 30 minutes, distinct from
-  upstream stream-silence and stall limits. Timeout kills the coding child.
 - `webhook_port`, `webhook_secret`: optional signed mention listener; both must be configured.
+
+Plane execution uses the upstream `codex.read_timeout_ms`, `codex.turn_timeout_ms`,
+`codex.stall_timeout_ms`, and hook timeout controls. There is no additional Plane execution deadline.
+The removed `tracker.provider.run_timeout_ms` field is no longer used.
 
 Poll state candidates client-side (Plane lists do not provide the required state filter). Cursor
 pagination and bounded 429 retries honor `Retry-After` (up to 60 seconds per delay). Project/work-item
@@ -71,6 +73,27 @@ repository and never embedded in a git URL or workflow prompt.
 Codex owns thread persistence. Plane attempts search the exact named thread for the issue and cwd,
 resume it when available, and start fresh if lookup/resume fails. A deleted/cleaned workspace can
 start a new thread. Existing trackers still start fresh threads as upstream does.
+
+## Failure policy and workspaces
+
+Upstream retries eligible active tasks after an abnormal worker exit or stall. Plane's additional
+handoff policy attempts a comment and `Human Review` when a normal state-triggered run exits while
+the item is still `AI Doing`, including coding failures and exhausted `agent.max_turns`. Because
+`Human Review` is inactive, further automatic execution stops after a successful state write.
+Set `AI Todo` to request another attempt. Claim/preparation failures that leave the item active
+still enter upstream retry handling. API outages can prevent the handoff write.
+
+A workspace is one isolated directory per issue, not the Symphony service checkout or your existing
+project checkout. The supplied `after_create` hook clones `CODE_REPO_URL` into each new issue directory.
+Another issue gets another clone; a retry for the same issue reuses its existing directory and git
+state. Branch creation follows the task/project policy. The engine does not automatically create
+Git worktrees. A shared repository plus per-issue worktrees can be implemented in repository hooks,
+including worktree registration cleanup in `before_remove`.
+
+The default `AI Done`/cancelled terminal states trigger workspace cleanup. `Human Review` preserves
+the workspace. Publish or otherwise preserve delivery before a terminal transition, because local
+unpublished changes are removed with the workspace. The live validation workflow deliberately
+omits `AI Done` from terminal states to preserve its isolated commit for inspection and follow-up.
 
 ## Signed mentions
 

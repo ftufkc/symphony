@@ -18,13 +18,7 @@ defmodule SymphonyElixir.Plane.Runner do
       :ok ->
         Runtime.begin_run(ctx)
         runner_opts = session_options(opts, tracker, cfg, issue, mention, secret_names)
-        task = Task.async(fn -> prepare_and_invoke(ctx, recipient, runner_opts) end)
-
-        result =
-          case Task.yield(task, tracker.provider["run_timeout_ms"] || 1_800_000) || Task.shutdown(task, :brutal_kill) do
-            {:ok, value} -> value
-            _ -> {:error, :run_timeout}
-          end
+        result = prepare_and_invoke(ctx, recipient, runner_opts)
 
         if context = Runtime.finish_run(issue.id), do: finalize(context, result)
         :ok

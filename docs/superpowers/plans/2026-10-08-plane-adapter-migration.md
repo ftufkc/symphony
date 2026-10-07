@@ -35,3 +35,7 @@
 - Run targeted tests, then the upstream required `make all` gates (format, specs, strict lint, coverage and Dialyzer).
 - Audit archive and final staged changes for credentials. Record changed upstream integration points and remote commit provenance.
 - Do not start the production poller or alter real Plane tasks merely to verify installation; live acceptance uses explicitly scoped fixtures when current credentials are available.
+
+## 2026-10-08 后续调整
+
+按用户要求移除 Plane 额外的 30 分钟执行总限制和 `run_timeout_ms` 配置，直接在上游调度器监控的 worker 中执行编码，保留上游超时与卡死检测。此次不调整异常后的人工复核策略、工作区策略或会话续接策略。验证覆盖执行不中途截断、worker 取消与写回兜底，并运行完整上游检查。

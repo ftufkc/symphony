@@ -52,7 +52,7 @@ defmodule SymphonyElixir.PlaneTest do
     invalid = %{tracker | provider: Map.put(tracker.provider, "api_url", "https://plane.test/api/v2")}
     assert {:error, :invalid_plane_ce_api_url} = Adapter.validate_config(invalid)
 
-    for {key, value} <- [{"project_ids", "bad"}, {"webhook_port", -1}, {"webhook_port", 1234}, {"run_timeout_ms", 0}] do
+    for {key, value} <- [{"project_ids", "bad"}, {"webhook_port", -1}, {"webhook_port", 1234}] do
       assert {:error, :invalid_plane_config} = Adapter.validate_config(%{tracker | provider: Map.put(tracker.provider, key, value)})
     end
 
@@ -172,32 +172,48 @@ defmodule SymphonyElixir.PlaneTest do
     assert Runtime.pending_ids() == []
   end
 
-  test "coding worker failure, total timeout and comment-context failure enter human review", %{opts: opts, state: state} do
+  test "coding worker and comment-context failures enter human review", %{opts: opts, state: state} do
     {:ok, [issue]} = Client.fetch_issues_by_ids(["p1/w1"], opts)
     assert :ok = Runner.run(issue, self(), opts ++ [runner_fun: fn _, _, _ -> raise "failure" end])
     assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1Human Review"
     assert length(Agent.get(state, & &1.comments[{"p1", "w1"}])) == 1
-    tracker = Keyword.fetch!(opts, :tracker_settings)
-    tracker = %{tracker | provider: Map.put(tracker.provider, "run_timeout_ms", 30)}
-    owner = self()
-    Agent.update(state, &put_in(&1, [:items, {"p1", "w1"}, "state"], "p1AI Todo"))
-
-    assert :ok =
-             Runner.run(issue, self(),
-               tracker_settings: tracker,
-               runner_fun: fn _, _, _ ->
-                 send(owner, {:child, self()})
-                 Process.sleep(:infinity)
-               end
-             )
-
-    assert_received {:child, child}
-    refute Process.alive?(child)
     path = "/api/v1/workspaces/test/projects/p1/work-items/w1/comments/"
     Agent.update(state, &put_in(&1, [:items, {"p1", "w1"}, "state"], "p1AI Todo"))
     Agent.update(state, &put_in(&1, [:errors, {"GET", path}], 500))
     assert :ok = Runner.run(issue, self(), opts ++ [runner_fun: fn _, _, _ -> flunk("must not run without context") end])
     assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1Human Review"
+  end
+
+  test "Plane does not impose an execution deadline on the upstream worker", %{opts: opts, state: state} do
+    {:ok, [issue]} = Client.fetch_issues_by_ids(["p1/w1"], opts)
+    tracker = opts[:tracker_settings]
+    tracker = %{tracker | provider: Map.put(tracker.provider, "run_timeout_ms", 1)}
+    assert :ok = Adapter.validate_config(tracker)
+    parent = self()
+
+    {worker, monitor} =
+      spawn_monitor(fn ->
+        result =
+          Runner.run(issue, parent,
+            tracker_settings: tracker,
+            runner_fun: fn _, _, _ ->
+              send(parent, {:coding_started, self()})
+
+              receive do
+                :finish_coding -> :ok
+              end
+            end
+          )
+
+        send(parent, {:coding_finished, result})
+      end)
+
+    assert_receive {:coding_started, ^worker}
+    refute_receive {:DOWN, ^monitor, :process, ^worker, _reason}, 50
+    assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1AI Doing"
+    send(worker, :finish_coding)
+    assert_receive {:coding_finished, :ok}
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}
   end
 
   test "startup orphan recovery is project scoped and idempotent", %{tracker: tracker, state: state} do
@@ -228,7 +244,7 @@ defmodule SymphonyElixir.PlaneTest do
     assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1AI Done"
   end
 
-  test "owner termination cancels the coding child and emits one fallback", %{opts: opts, state: state} do
+  test "worker termination cancels linked work and emits one fallback", %{opts: opts, state: state} do
     {:ok, [issue]} = Client.fetch_issues_by_ids(["p1/w1"], opts)
     parent = self()
 
@@ -240,14 +256,20 @@ defmodule SymphonyElixir.PlaneTest do
           opts ++
             [
               runner_fun: fn _, _, _ ->
-                send(parent, {:running_child, self()})
+                Task.start_link(fn ->
+                  send(parent, {:linked_work, self()})
+                  Process.sleep(:infinity)
+                end)
+
+                send(parent, {:running_worker, self()})
                 Process.sleep(:infinity)
               end
             ]
         )
       end)
 
-    assert_receive {:running_child, child}
+    assert_receive {:running_worker, ^worker}
+    assert_receive {:linked_work, child}
     child_monitor = Process.monitor(child)
     Process.exit(worker, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}

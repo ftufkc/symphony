@@ -13,9 +13,7 @@ defmodule SymphonyElixir.Plane.Adapter do
              (is_integer(config.provider["webhook_port"]) and config.provider["webhook_port"] in 1..65_535),
          true <-
            is_nil(config.provider["webhook_port"]) or
-             not is_nil(Client.resolve(config.provider["webhook_secret"], "PLANE_WEBHOOK_SECRET")),
-         timeout = config.provider["run_timeout_ms"] || 1_800_000,
-         true <- is_integer(timeout) and timeout > 0 do
+             not is_nil(Client.resolve(config.provider["webhook_secret"], "PLANE_WEBHOOK_SECRET")) do
       :ok
     else
       false -> {:error, :invalid_plane_config}

@@ -10,7 +10,6 @@ tracker:
     trigger_state: AI Todo
     working_state: AI Doing
     review_state: Human Review
-    run_timeout_ms: 1800000
     # Optional signed mentions; register the webhook before enabling this port.
     # webhook_port: 8091
     # webhook_secret: $PLANE_WEBHOOK_SECRET
