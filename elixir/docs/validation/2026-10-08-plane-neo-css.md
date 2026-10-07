@@ -12,7 +12,15 @@
 
 验收发现并修复了普通任务缺少触发原因字段、中文默认模板产生无效 UTF-8 两处问题。默认策略模板改用英文，中文工单正文和标题的 UTF-8 渲染已纳入测试；未修改上游模板引擎。
 
-当前 CE 公开 `/api/v1` 没有 webhook 注册端点，管理接口在登录态 app API。当前本机 Plane 的 `WEBHOOK_ALLOWED_HOSTS` 为空，因此本次验证了真实评论事件的手动签名投递，尚未验证 Plane worker 自动向本机回调。启用自动回调需要在 Plane 设置中注册 webhook 并配置回调白名单。
+当前 CE 公开 `/api/v1` 没有 webhook 注册端点，管理接口在登录态 app API。首次验收只验证了手动签名投递；后续已补齐自动回调验收：
+
+- 在本机 Plane 的 ignored `.local/.env` 中加入 `WEBHOOK_ALLOWED_HOSTS=host.docker.internal`，保留原配置备份，并重新创建 API/worker 容器使配置生效。
+- 仅为独立验证工作区配置 webhook，目标 `http://host.docker.internal:18091/webhook`。
+- 通过 Plane API 发布真实 @bot 评论 `4aa946c5-00b7-4d48-9b90-40d0600b7db8`，没有向 Symphony 手动发送 webhook。
+- Plane worker 自动投递 `issue_comment/created`，WebhookLog 记录 HTTP 200、retry_count=0。
+- Symphony 恢复同一 Codex thread，写回中文复核评论 `bafa2ff0-e6e8-494f-a69e-e1aad6fa2567`；27/27 测试通过，代码和 `AI Done` 状态保持不变。
+- bot 回复对应的自动 webhook 同样返回 200，且未触发第二次 agent 运行，防自激生效。
+- 验收后停用测试 webhook 并停止测试监听服务；回调白名单配置保留。
 
 验收工作区、补丁和配置保存在 checkout 的 ignored `.tmp/` 中，不把私有目标仓库源码、API token、webhook secret 或运行日志提交到公开 fork。临时 Symphony 监听服务在验收结束后停止；Plane 测试工单和隔离提交保留供复核。
 
