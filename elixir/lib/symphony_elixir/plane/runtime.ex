@@ -18,6 +18,8 @@ defmodule SymphonyElixir.Plane.Runtime do
   def begin_run(context), do: GenServer.call(__MODULE__, {:begin, context})
   @spec finish_run(String.t()) :: map() | nil
   def finish_run(id), do: GenServer.call(__MODULE__, {:finish, id})
+  @spec run_context(String.t()) :: map() | nil
+  def run_context(id), do: GenServer.call(__MODULE__, {:run_context, id})
   @spec summary_written(String.t()) :: :ok
   def summary_written(id), do: GenServer.call(__MODULE__, {:summary, id})
   @spec claim_notice?(String.t()) :: boolean()
@@ -74,6 +76,8 @@ defmodule SymphonyElixir.Plane.Runtime do
     {:reply, ctx, %{state | runs: runs, pending: Map.delete(state.pending, id)}}
   end
 
+  def handle_call({:run_context, id}, _from, state), do: {:reply, state.runs[id], state}
+
   def handle_call({:claim_notice, id}, _from, state) do
     now = System.monotonic_time(:millisecond)
     allowed = not Map.has_key?(state.claim_failures, id) or now - state.claim_failures[id] >= 300_000
@@ -116,6 +120,8 @@ defmodule SymphonyElixir.Plane.Runtime do
   def working_state(tracker), do: tracker.provider["working_state"] || "AI Doing"
   @spec review_state(map()) :: String.t()
   def review_state(tracker), do: tracker.provider["review_state"] || "Human Review"
+  @spec error_state(map()) :: String.t()
+  def error_state(tracker), do: tracker.provider["error_state"] || "AI Error"
 
   defp configure_scope(tracker, cfg, state) do
     scope = {cfg.api_url, cfg.workspace_slug, cfg.provider["project_ids"], :crypto.hash(:sha256, cfg.api_key), cfg.provider["webhook_port"]}

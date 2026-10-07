@@ -17,6 +17,8 @@ upstream Elixir scheduler, execution timeout controls and fresh threads per work
 implementations are retained. See [Plane setup](elixir/docs/plane.md)
 and [the coding workflow](elixir/PLANE_WORKFLOW.md). Repository preparation and PR/MR policy remain
 workflow-owned, so code can be hosted on GitLab or another Git service.
+Plane execution faults pause in `AI Error`; `Human Review` is reserved for review and decisions.
+Move a repaired task back to `AI Todo` to retry. Normal turn-budget exhaustion retains upstream continuation.
 
 The earlier Python implementation is preserved with its exact commit provenance in
 [archive/](archive/README.md). The original local repository remains separate.

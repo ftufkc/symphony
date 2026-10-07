@@ -28,6 +28,9 @@ and convenience tools. Plane uses the upstream worker timeout and stall controls
 Codex thread for each worker session. See [Plane setup](docs/plane.md) and use `PLANE_WORKFLOW.md` for coding tasks. Symphony executes those
 tools with configured host-side auth and removes declared tracker-token environment variables from
 the Codex child, so the agent does not need a second tracker login.
+Plane execution faults attempt `AI Error`, an inactive state that preserves the workspace for a
+user-requested retry through `AI Todo`. Normal worker completion keeps upstream continuation;
+`Human Review` remains a workflow-selected review/decision state.
 
 If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
 Symphony stops the active agent for that issue and cleans up matching workspaces.

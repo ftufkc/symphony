@@ -10,6 +10,7 @@ tracker:
     trigger_state: AI Todo
     working_state: AI Doing
     review_state: Human Review
+    error_state: AI Error
     # Optional signed mentions; register the webhook before enabling this port.
     # webhook_port: 8091
     # webhook_secret: $PLANE_WEBHOOK_SECRET
@@ -68,4 +69,7 @@ Description and comments:
 7. For a state trigger, write the summary first, then use set_state to move to AI Done when fully
    implemented and verified, or Human Review for review/access/decision blockers.
 8. Returning a final message alone does not write back to Plane. The service attempts a fallback
-   comment on exit, and moves normal tasks still in AI Doing to Human Review.
+   comment on exit. A normal worker reaching its turn budget leaves AI Doing eligible for upstream
+   continuation. Execution errors attempt an error notice and AI Error when a state-triggered item
+   is still in AI Doing. AI Error pauses execution and preserves the workspace; after fixing the
+   problem, move it to AI Todo to retry. A failing test that you can still fix is continuing work.

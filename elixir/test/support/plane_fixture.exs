@@ -28,7 +28,7 @@ defmodule SymphonyElixir.PlaneFixture do
 
     states =
       for pid <- ["p1", "p2"], into: %{} do
-        {pid, Enum.map(["AI Todo", "AI Doing", "Human Review", "AI Done"], &%{"id" => pid <> &1, "name" => &1})}
+        {pid, Enum.map(["AI Todo", "AI Doing", "AI Error", "Human Review", "AI Done"], &%{"id" => pid <> &1, "name" => &1})}
       end
 
     items =

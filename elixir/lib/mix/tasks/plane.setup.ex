@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Plane.Setup do
   use Mix.Task
   @moduledoc "Explicit CE state setup: mix plane.setup states --workflow FILE [--project ID]."
   alias SymphonyElixir.{Config, Workflow}
-  alias SymphonyElixir.Plane.Client
+  alias SymphonyElixir.Plane.{Adapter, Client, Runtime}
   @shortdoc "Explicitly set up Plane project states (never starts the poller)"
   @states [{"AI Todo", "unstarted", "#a855f7"}, {"AI Doing", "started", "#3b82f6"}, {"Human Review", "started", "#f59e0b"}, {"AI Done", "completed", "#22c55e"}]
 
@@ -19,27 +19,29 @@ defmodule Mix.Tasks.Plane.Setup do
     Workflow.set_workflow_file_path(opts[:workflow] || "PLANE_WORKFLOW.md")
     tracker = Config.settings!().tracker
     if tracker.kind != "plane", do: Mix.raise("This command requires a Plane workflow")
+    if Adapter.validate_config(tracker) != :ok, do: Mix.raise("Invalid Plane setup configuration")
     client_opts = [tracker_settings: tracker]
 
     case commands do
-      ["states"] -> setup_states(opts[:project], client_opts)
+      ["states"] -> setup_states(opts[:project], tracker, client_opts)
       _ -> Mix.raise("Usage: mix plane.setup states --workflow PLANE_WORKFLOW.md [--project ID]")
     end
   end
 
-  defp setup_states(target, opts) do
+  defp setup_states(target, tracker, opts) do
     {:ok, projects} = Client.projects(opts)
     selected = Enum.filter(projects, &(is_nil(target) or target in [&1["id"], &1["identifier"]]))
     if selected == [], do: Mix.raise("No matching Plane projects")
-    Enum.each(selected, &ensure_project_states(&1, opts))
+    desired = @states ++ [{Runtime.error_state(tracker), "started", "#ef4444"}]
+    Enum.each(selected, &ensure_project_states(&1, desired, opts))
   end
 
-  defp ensure_project_states(project, opts) do
+  defp ensure_project_states(project, desired, opts) do
     {:ok, states} = Client.states(project["id"], opts)
     grouped = Enum.group_by(states, &Client.normalize(&1["name"]))
     if Enum.any?(grouped, fn {_name, rows} -> length(rows) > 1 end), do: Mix.raise("Ambiguous Plane state names")
 
-    Enum.each(@states, fn {name, group, color} ->
+    Enum.each(desired, fn {name, group, color} ->
       existing = List.first(grouped[Client.normalize(name)] || [])
       existing = existing || legacy_working_state(name, grouped)
       path = Client.project_path(project["id"], "states/", opts)

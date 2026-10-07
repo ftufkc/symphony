@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Plane.Adapter do
   def validate_config(tracker) do
     with {:ok, config} <- Client.settings(tracker),
          true <- is_list(tracker.active_states) and is_list(tracker.terminal_states),
+         true <- valid_error_state?(tracker),
          true <- is_nil(config.provider["project_ids"]) or is_list(config.provider["project_ids"]),
          true <-
            is_nil(config.provider["webhook_port"]) or
@@ -19,6 +20,12 @@ defmodule SymphonyElixir.Plane.Adapter do
       false -> {:error, :invalid_plane_config}
       error -> error
     end
+  end
+
+  defp valid_error_state?(tracker) do
+    name = Runtime.error_state(tracker)
+    excluded = tracker.active_states ++ tracker.terminal_states ++ [tracker.provider["trigger_state"] || "AI Todo", Runtime.working_state(tracker), Runtime.review_state(tracker)]
+    is_binary(name) and Client.normalize(name) != "" and Client.normalize(name) not in Enum.map(excluded, &Client.normalize/1)
   end
 
   @spec fetch_issues_by_states([String.t()]) :: {:ok, [SymphonyElixir.Tracker.Issue.t()]} | {:error, term()}

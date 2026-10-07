@@ -19,9 +19,7 @@ defmodule SymphonyElixir.Plane.Runner do
         Runtime.begin_run(ctx)
         runner_opts = session_options(opts, tracker, mention, secret_names)
         result = prepare_and_invoke(ctx, recipient, runner_opts)
-
-        if context = Runtime.finish_run(issue.id), do: finalize(context, result)
-        :ok
+        finish_attempt(issue.id, result)
 
       error ->
         if Runtime.claim_notice?(issue.id),
@@ -38,32 +36,57 @@ defmodule SymphonyElixir.Plane.Runner do
     end
   end
 
-  @spec finalize(map(), term()) :: :ok
+  defp finish_attempt(id, result) do
+    if context = Runtime.run_context(id) do
+      try do
+        finalize(context, result)
+      after
+        Runtime.finish_run(id)
+      end
+    end
+
+    if result == :ok do
+      :ok
+    else
+      raise "Plane coding attempt failed; check the workspace and service logs"
+    end
+  end
+
+  @spec finalize(map(), term()) :: :ok | {:error, :plane_error_writeback_failed}
+  def finalize(ctx, :ok), do: write_fallback(ctx, :ok)
+
   def finalize(ctx, result) do
+    write_fallback(ctx, result)
+    maybe_error(ctx)
+  end
+
+  defp maybe_error(%{mention: true}), do: :ok
+
+  defp maybe_error(ctx) do
     ref = ctx.issue.native_ref
     opts = ctx.client_opts
-
-    write_fallback(ctx, result)
 
     with {:ok, row} <- Client.get_item(ref["project_id"], ref["work_item_id"], opts),
          {:ok, states} <- Client.states(ref["project_id"], opts) do
       state = state_name(row, states)
       still_working = Client.normalize(state) == Client.normalize(Runtime.working_state(ctx.tracker))
 
-      maybe_review(ctx, still_working)
+      if still_working do
+        case Client.set_state(ref["project_id"], ref["work_item_id"], Runtime.error_state(ctx.tracker), opts) do
+          {:ok, _} -> :ok
+          _ -> error_writeback_failed(ctx)
+        end
+      else
+        :ok
+      end
     else
-      _ -> Logger.warning("Plane finalization unavailable issue_id=#{ctx.issue.id} issue_identifier=#{ctx.issue.identifier}")
+      _ -> error_writeback_failed(ctx)
     end
-
-    :ok
   end
 
-  defp maybe_review(%{mention: true}, _working), do: :ok
-  defp maybe_review(_ctx, false), do: :ok
-
-  defp maybe_review(ctx, true) do
-    ref = ctx.issue.native_ref
-    Client.set_state(ref["project_id"], ref["work_item_id"], Runtime.review_state(ctx.tracker), ctx.client_opts)
+  defp error_writeback_failed(ctx) do
+    Logger.warning("Plane error-state write-back unavailable issue_id=#{ctx.issue.id} issue_identifier=#{ctx.issue.identifier}")
+    {:error, :plane_error_writeback_failed}
   end
 
   defp bind_settings(tracker, cfg) do
@@ -109,13 +132,15 @@ defmodule SymphonyElixir.Plane.Runner do
     Client.normalize(name) in Enum.map(names, &Client.normalize/1)
   end
 
-  defp write_fallback(%{summary_written: true}, _result), do: :ok
+  defp write_fallback(%{summary_written: true}, :ok), do: :ok
 
   defp write_fallback(ctx, result) do
     text =
       if result == :ok,
         do: "Symphony coding attempt ended. No summary comment was received; verify changes and tests before accepting the result.",
-        else: "Symphony coding attempt stopped (error, cancellation, or timeout). Check the workspace and service logs; human review is required."
+        else:
+          "Symphony coding attempt stopped (execution error, cancellation, or inactivity timeout). Check the workspace and service logs. " <>
+            "If the item is in #{Runtime.error_state(ctx.tracker)}, fix the problem and move it to #{ctx.tracker.provider["trigger_state"] || "AI Todo"} to retry."
 
     ref = ctx.issue.native_ref
 
@@ -123,6 +148,8 @@ defmodule SymphonyElixir.Plane.Runner do
       {:ok, _} -> :ok
       _ -> Logger.warning("Plane fallback comment failed issue_id=#{ctx.issue.id} issue_identifier=#{ctx.issue.identifier}")
     end
+
+    :ok
   end
 
   defp prepare_and_invoke(ctx, recipient, opts) do

@@ -56,6 +56,14 @@ defmodule SymphonyElixir.PlaneTest do
       assert {:error, :invalid_plane_config} = Adapter.validate_config(%{tracker | provider: Map.put(tracker.provider, key, value)})
     end
 
+    for name <- ["", "  ", 123, "ai TODO", "AI Doing", "human review", "AI Done"] do
+      assert {:error, :invalid_plane_config} = Adapter.validate_config(%{tracker | provider: Map.put(tracker.provider, "error_state", name)})
+    end
+
+    assert {:error, :invalid_plane_config} = Adapter.validate_config(%{tracker | active_states: tracker.active_states ++ ["ai error"]})
+    assert {:error, :invalid_plane_config} = Adapter.validate_config(%{tracker | terminal_states: tracker.terminal_states ++ ["AI Error"]})
+    assert :ok = Adapter.validate_config(%{tracker | provider: Map.put(tracker.provider, "error_state", "Execution Error")})
+
     assert "CUSTOM_SECRET" in Client.secret_environment_names(%{provider: %{"api_key" => "$CUSTOM_SECRET"}})
   end
 
@@ -172,16 +180,142 @@ defmodule SymphonyElixir.PlaneTest do
     assert Runtime.pending_ids() == []
   end
 
-  test "coding worker and comment-context failures enter human review", %{opts: opts, state: state} do
+  test "coding worker and comment-context failures enter AI Error", %{opts: opts, state: state} do
     {:ok, [issue]} = Client.fetch_issues_by_ids(["p1/w1"], opts)
-    assert :ok = Runner.run(issue, self(), opts ++ [runner_fun: fn _, _, _ -> raise "failure" end])
-    assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1Human Review"
+    assert_raise RuntimeError, ~r/Plane coding attempt failed/, fn -> Runner.run(issue, self(), opts ++ [runner_fun: fn _, _, _ -> raise "failure" end]) end
+    assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1AI Error"
     assert length(Agent.get(state, & &1.comments[{"p1", "w1"}])) == 1
+    assert hd(Agent.get(state, & &1.comments[{"p1", "w1"}]))["comment_html"] =~ "AI Error"
     path = "/api/v1/workspaces/test/projects/p1/work-items/w1/comments/"
     Agent.update(state, &put_in(&1, [:items, {"p1", "w1"}, "state"], "p1AI Todo"))
     Agent.update(state, &put_in(&1, [:errors, {"GET", path}], 500))
-    assert :ok = Runner.run(issue, self(), opts ++ [runner_fun: fn _, _, _ -> flunk("must not run without context") end])
-    assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1Human Review"
+    parent = self()
+    assert_raise RuntimeError, fn -> Runner.run(issue, parent, opts ++ [runner_fun: fn _, _, _ -> send(parent, :coding_without_context) end]) end
+    refute_received :coding_without_context
+    assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1AI Error"
+  end
+
+  test "AI Error pauses polling and moving back to AI Todo requests another attempt", %{opts: opts, tracker: tracker, state: state} do
+    :ok = Runtime.configure(tracker)
+    {:ok, [issue]} = Client.fetch_issues_by_ids(["p1/w1"], opts)
+    assert_raise RuntimeError, fn -> Runner.run(issue, self(), opts ++ [runner_fun: fn _, _, _ -> exit(:codex_failed) end]) end
+    assert {:ok, candidates} = Adapter.fetch_issues_by_states(tracker.active_states)
+    refute Enum.any?(candidates, &(&1.id == issue.id))
+    :sys.replace_state(Runtime, &%{&1 | scope: nil})
+    assert :ok = Runtime.configure(tracker)
+    assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1AI Error"
+
+    assert {:ok, _} = Client.set_state("p1", "w1", "AI Todo", opts)
+    assert {:ok, candidates} = Adapter.fetch_issues_by_states(tracker.active_states)
+    retry_issue = Enum.find(candidates, &(&1.id == issue.id))
+    assert retry_issue
+
+    assert :ok =
+             Runner.run(
+               retry_issue,
+               self(),
+               opts ++
+                 [
+                   runner_fun: fn _, _, _ ->
+                     assert {:ok, _} = Client.set_state("p1", "w1", "AI Done", opts)
+                     :ok
+                   end
+                 ]
+             )
+
+    assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1AI Done"
+  end
+
+  test "an earlier progress comment does not suppress an execution-error notice", %{opts: opts, state: state} do
+    {:ok, [issue]} = Client.fetch_issues_by_ids(["p1/w1"], opts)
+
+    runner = fn prepared, _, _ ->
+      assert AgentTool.execute("add_comment", %{"markdown" => "Work in progress."}, opts ++ [issue: prepared])["success"]
+      raise "Codex stopped after posting progress"
+    end
+
+    assert_raise RuntimeError, fn -> Runner.run(issue, self(), opts ++ [runner_fun: runner]) end
+    comments = Agent.get(state, & &1.comments[{"p1", "w1"}])
+    assert length(comments) == 2
+    assert List.last(comments)["comment_html"] =~ "move it to AI Todo to retry"
+    assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1AI Error"
+  end
+
+  test "execution errors preserve states selected during the attempt", %{opts: opts, state: state} do
+    Agent.update(state, &update_in(&1, [:states, "p1"], fn rows -> rows ++ [%{"id" => "p1Cancelled", "name" => "Cancelled"}] end))
+    {:ok, [issue]} = Client.fetch_issues_by_ids(["p1/w1"], opts)
+
+    for name <- ["Human Review", "AI Done", "Cancelled", "AI Todo"] do
+      assert {:ok, _} = Client.set_state("p1", "w1", "AI Todo", opts)
+
+      runner = fn _, _, _ ->
+        assert {:ok, _} = Client.set_state("p1", "w1", name, opts)
+        raise "failure after an operator state change"
+      end
+
+      assert_raise RuntimeError, fn -> Runner.run(issue, self(), opts ++ [runner_fun: runner]) end
+      assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1" <> name
+    end
+  end
+
+  test "failed mention writes a notice while preserving actual state", %{opts: opts, tracker: tracker, state: state} do
+    :ok = Runtime.configure(tracker)
+    assert {:ok, _} = Client.set_state("p1", "w1", "AI Done", opts)
+    assert :ok = Runtime.accept(mention())
+    assert {:ok, [issue]} = Adapter.fetch_issues_by_ids(["p1/w1"])
+    assert_raise RuntimeError, fn -> Runner.run(issue, self(), opts ++ [runner_fun: fn _, _, _ -> raise "mention failed" end]) end
+    assert Runtime.pending_ids() == []
+    assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1AI Done"
+    assert length(Agent.get(state, & &1.comments[{"p1", "w1"}])) == 1
+  end
+
+  test "failed error-state write-back preserves a failure signal for upstream backoff", %{opts: opts, state: state} do
+    {:ok, [issue]} = Client.fetch_issues_by_ids(["p1/w1"], opts)
+    path = "/api/v1/workspaces/test/projects/p1/work-items/w1/"
+
+    runner = fn _, _, _ ->
+      Agent.update(state, &put_in(&1, [:errors, {"PATCH", path}], 500))
+      raise "coding failed"
+    end
+
+    assert_raise RuntimeError, fn -> Runner.run(issue, self(), opts ++ [runner_fun: runner]) end
+    assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1AI Doing"
+    assert Runtime.overlay(issue).dispatchable
+  end
+
+  test "write-back retains ownership without making the live worker unroutable", %{opts: opts, tracker: tracker, state: state} do
+    :ok = Runtime.configure(tracker)
+    {:ok, [issue]} = Client.fetch_issues_by_ids(["p1/w1"], opts)
+    parent = self()
+
+    transport = fn method, path, query, body, _config ->
+      if method == "POST" and String.ends_with?(path, "/comments/") do
+        send(parent, {:finalizing_worker, self()})
+
+        receive do
+          :finish_writeback -> :ok
+        end
+      end
+
+      Client.request(method, path, query, body, opts)
+    end
+
+    {worker, monitor} =
+      spawn_monitor(fn ->
+        assert_raise RuntimeError, fn -> Runner.run(issue, parent, opts ++ [request_fun: transport, runner_fun: fn _, _, _ -> raise "failed" end]) end
+      end)
+
+    assert_receive {:finalizing_worker, ^worker}, 1_000
+    assert Runtime.run_context(issue.id).owner == worker
+    assert {:ok, [live_issue]} = Adapter.fetch_issues_by_ids([issue.id])
+    assert live_issue.dispatchable
+    assert :ok = Runtime.accept(mention())
+    assert Runtime.pending_ids() == []
+    send(worker, :finish_writeback)
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 1_000
+    assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1AI Error"
+    assert Runtime.run_context(issue.id) == nil
+    assert Runtime.overlay(issue).dispatchable
   end
 
   test "Plane does not impose an execution deadline on the upstream worker", %{opts: opts, state: state} do
@@ -274,7 +408,35 @@ defmodule SymphonyElixir.PlaneTest do
     Process.exit(worker, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}
     assert_receive {:DOWN, ^child_monitor, :process, ^child, _reason}
-    await(fn -> Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1Human Review" end)
+    await(fn -> Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1AI Error" end)
+    assert length(Agent.get(state, & &1.comments[{"p1", "w1"}])) == 1
+  end
+
+  test "intentional worker cancellation preserves the operator's paused state", %{opts: opts, state: state} do
+    {:ok, [issue]} = Client.fetch_issues_by_ids(["p1/w1"], opts)
+    parent = self()
+
+    {worker, monitor} =
+      spawn_monitor(fn ->
+        Runner.run(
+          issue,
+          parent,
+          opts ++
+            [
+              runner_fun: fn _, _, _ ->
+                send(parent, {:coding_started, self()})
+                Process.sleep(:infinity)
+              end
+            ]
+        )
+      end)
+
+    assert_receive {:coding_started, ^worker}
+    assert {:ok, _} = Client.set_state("p1", "w1", "Human Review", opts)
+    Process.exit(worker, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}
+    await(fn -> :sys.get_state(Runtime).runs == %{} end)
+    assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1Human Review"
     assert length(Agent.get(state, & &1.comments[{"p1", "w1"}])) == 1
   end
 
@@ -326,7 +488,7 @@ defmodule SymphonyElixir.PlaneTest do
     Agent.update(state, &put_in(&1, [:states, "p1"], [%{"id" => "old", "name" => "AI Start"}, %{"id" => "todo", "name" => "AI TODO"}]))
     PlaneSetup.run(["states", "--workflow", workflow, "--project", "ONE"])
     names = Agent.get(state, &Enum.map(&1.states["p1"], fn row -> row["name"] end))
-    assert Enum.sort(names) == Enum.sort(["AI Todo", "AI Doing", "Human Review", "AI Done"])
+    assert Enum.sort(names) == Enum.sort(["AI Todo", "AI Doing", "AI Error", "Human Review", "AI Done"])
     assert Enum.any?(Agent.get(state, & &1.requests), fn {m, _p, _q, _b, _h} -> m == "POST" end)
     PlaneSetup.run(["states", "--workflow", workflow])
     assert_raise Mix.Error, fn -> PlaneSetup.run(["states", "--workflow", workflow, "--project", "absent"]) end
@@ -337,8 +499,28 @@ defmodule SymphonyElixir.PlaneTest do
     Agent.update(state, &put_in(&1, [:errors, {"POST", "/api/v1/workspaces/test/projects/p1/states/"}], 500))
     Agent.update(state, &put_in(&1, [:states, "p1"], []))
     assert_raise Mix.Error, fn -> PlaneSetup.run(["states", "--workflow", workflow]) end
+    tracker = Config.settings!().tracker
+    write_workflow_file!(workflow, tracker_kind: "plane", tracker_provider: Map.put(tracker.provider, "error_state", "AI Todo"))
+    assert_raise Mix.Error, "Invalid Plane setup configuration", fn -> PlaneSetup.run(["states", "--workflow", workflow]) end
     write_workflow_file!(workflow, tracker_kind: "memory")
     assert_raise Mix.Error, fn -> PlaneSetup.run(["states", "--workflow", workflow]) end
+  end
+
+  test "setup and failed execution honor a custom error-state name", %{opts: opts, tracker: tracker, state: state} do
+    tracker = %{tracker | provider: Map.put(tracker.provider, "error_state", "Execution Error")}
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "plane",
+      tracker_provider: tracker.provider,
+      tracker_active_states: tracker.active_states,
+      tracker_terminal_states: tracker.terminal_states
+    )
+
+    PlaneSetup.run(["states", "--workflow", Workflow.workflow_file_path(), "--project", "ONE"])
+    assert "Execution Error" in Agent.get(state, &Enum.map(&1.states["p1"], fn row -> row["name"] end))
+    {:ok, [issue]} = Client.fetch_issues_by_ids(["p1/w1"], opts)
+    assert_raise RuntimeError, fn -> Runner.run(issue, self(), Keyword.put(opts, :tracker_settings, tracker) ++ [runner_fun: fn _, _, _ -> raise "failed" end]) end
+    assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1Execution Error"
   end
 
   test "the shipped coding workflow renders real normalized Plane context", %{opts: opts} do
@@ -358,7 +540,7 @@ defmodule SymphonyElixir.PlaneTest do
     assert prompt =~ "修复功能并验证测试"
   end
 
-  test "the Plane wrapper executes the upstream coding runner through real stdio", %{opts: opts} do
+  test "normal turn exhaustion keeps AI Doing and reuses the workspace on continuation", %{opts: opts, state: state} do
     {:ok, [issue]} = Client.fetch_issues_by_ids(["p1/w1"], opts)
     root = Path.dirname(Workflow.workflow_file_path())
     script = Path.join(root, "codex_turn.py")
@@ -394,6 +576,32 @@ defmodule SymphonyElixir.PlaneTest do
     assert_received {:codex_worker_update, _, %{event: :session_started}}
     assert {:ok, comments} = Client.comments("p1", "w1", opts)
     assert List.last(comments)["comment_html"] =~ "attempt ended"
+    assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1AI Doing"
+    workspace = Path.join(root, "workspaces/ONE-1")
+    marker = Path.join(workspace, "existing-work.txt")
+    File.write!(marker, "preserve this progress")
+    assert :ok = Runner.run(issue, self(), opts ++ [max_turns: 1])
+    assert File.read!(marker) == "preserve this progress"
+    assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1AI Doing"
+  end
+
+  test "an upstream Codex startup failure pauses the item in AI Error", %{opts: opts, tracker: tracker, state: state} do
+    {:ok, [issue]} = Client.fetch_issues_by_ids(["p1/w1"], opts)
+    root = Path.dirname(Workflow.workflow_file_path())
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "plane",
+      tracker_provider: tracker.provider,
+      tracker_active_states: tracker.active_states,
+      tracker_terminal_states: tracker.terminal_states,
+      workspace_root: Path.join(root, "workspaces"),
+      codex_command: "sh -c 'exit 7'"
+    )
+
+    assert_raise RuntimeError, ~r/Plane coding attempt failed/, fn -> Runner.run(issue, self(), opts) end
+    assert Agent.get(state, & &1.items[{"p1", "w1"}]["state"]) == "p1AI Error"
+    assert File.dir?(Path.join(root, "workspaces/ONE-1"))
+    assert length(Agent.get(state, & &1.comments[{"p1", "w1"}])) == 1
   end
 
   test "resolved credentials remain bound and custom token variables stay excluded", %{opts: opts} do
