@@ -16,7 +16,8 @@ defmodule SymphonyElixir.Tracker do
     "gitlab" => SymphonyElixir.GitLab.Adapter,
     "jira" => SymphonyElixir.Jira.Adapter,
     "linear" => SymphonyElixir.Linear.Adapter,
-    "memory" => SymphonyElixir.Tracker.Memory
+    "memory" => SymphonyElixir.Tracker.Memory,
+    "plane" => SymphonyElixir.Plane.Adapter
   }
 
   @callback fetch_issues_by_states([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
@@ -38,6 +39,12 @@ defmodule SymphonyElixir.Tracker do
   @spec fetch_issues_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issues_by_ids(issue_ids) do
     adapter().fetch_issues_by_ids(issue_ids)
+  end
+
+  @spec run_agent(Issue.t(), pid(), keyword()) :: :ok | no_return()
+  def run_agent(issue, recipient, opts) do
+    runner = runner_for_adapter(adapter())
+    runner.run(issue, recipient, opts)
   end
 
   @doc """
@@ -97,6 +104,9 @@ defmodule SymphonyElixir.Tracker do
       :error -> {:error, {:unsupported_tracker_kind, kind}}
     end
   end
+
+  defp runner_for_adapter(SymphonyElixir.Plane.Adapter), do: SymphonyElixir.Plane.Runner
+  defp runner_for_adapter(_adapter), do: SymphonyElixir.AgentRunner
 
   defp adapter_for_settings!(%{kind: kind}) do
     {:ok, adapter} = adapter_for_kind(kind)

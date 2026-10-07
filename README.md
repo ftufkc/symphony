@@ -10,6 +10,16 @@ _In this [demo video](https://player.vimeo.com/video/1186371009?h=5626e4b899), S
 > [!WARNING]
 > Symphony is a low-key engineering preview for testing in trusted environments.
 
+## Plane CE fork
+
+This fork adds Plane Community Edition v1 work-items as a coding-task tracker while retaining the
+upstream Elixir scheduler and existing tracker implementations. See [Plane setup](elixir/docs/plane.md)
+and [the coding workflow](elixir/PLANE_WORKFLOW.md). Repository preparation and PR/MR policy remain
+workflow-owned, so code can be hosted on GitLab or another Git service.
+
+The earlier Python implementation is preserved with its exact commit provenance in
+[archive/](archive/README.md). The original local repository remains separate.
+
 ## Running Symphony
 
 ### Requirements

@@ -19,6 +19,10 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixir.GitLab.Client,
           SymphonyElixir.Jira.Client,
           SymphonyElixir.Linear.Client,
+          SymphonyElixir.Plane.Client,
+          SymphonyElixir.Plane.Runtime,
+          SymphonyElixir.Plane.Runner,
+          SymphonyElixir.Plane.Webhook,
           SymphonyElixir.SpecsCheck,
           SymphonyElixir.Orchestrator,
           SymphonyElixir.Orchestrator.State,
@@ -46,7 +50,8 @@ defmodule SymphonyElixir.MixProject do
       ],
       test_ignore_filters: [
         "test/support/snapshot_support.exs",
-        "test/support/test_support.exs"
+        "test/support/test_support.exs",
+        "test/support/plane_fixture.exs"
       ],
       dialyzer: [
         plt_add_apps: [:mix]

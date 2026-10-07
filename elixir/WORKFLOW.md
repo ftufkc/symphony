@@ -327,3 +327,5 @@ Use this exact structure for the persistent workpad comment and keep it updated 
 
 - <only include when something was confusing during execution>
 ````
+
+<!-- Plane users: use PLANE_WORKFLOW.md and docs/plane.md for CE v1 config and coding policy. -->
